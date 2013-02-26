@@ -1,0 +1,6 @@
+crontasks_manager
+================
+
+A simple script to handle specifics days when task have not to be
+run (non-working days, holidays, etc.). These days are handle without
+modifying the overall scheduling for crontasks.
