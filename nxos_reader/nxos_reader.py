@@ -66,6 +66,11 @@ class Nexus(object):
             self._interfaces = json.loads(out)["TABLE_interface"]
         return self._interfaces["ROW_interface"]
 
+    def get_interface(self, name):
+        for iface in self.interfaces:
+            if name == iface["interface"]:
+                return iface
+
     @property
     def vrfs(self):
         if not self._vrfs:
@@ -95,7 +100,9 @@ if __name__ == "__main__":
     parser.add_argument('--version', dest='version', action='store_const',
                         const=True, default=False,
                         help='show script version')
-    parser.add_argument('-c', '--connect', dest='conn',
+    parser.add_argument('-m', '--connect-master', dest='m_conn',
+                        help='specify a connection string user@device')
+    parser.add_argument('-s', '--connect-slave', dest='s_conn',
                         help='specify a connection string user@device')
 
     args = parser.parse_args()
@@ -104,36 +111,58 @@ if __name__ == "__main__":
         print("Script version: %s" % VERSION)
         exit()
 
-    if not args.conn:
+    if not args.m_conn or not args.s_conn:
         parser.error('connection string not provided')
         exit(1)
 
-    sw = Nexus(args.conn)
+    m_sw = Nexus(args.m_conn)
+    s_sw = Nexus(args.s_conn)
 
-    for vlan in sw.vlans:
+    for vlan in m_sw.vlans:
         vlan_id = vlan['vlanshowbr-vlanid']
 
+        # if vlan_id != "3951" and vlan_id != "3932":
+        #     continue
+
         vrf_name = "default"
-        for vrf in sw.vrf_ifaces:
+        for vrf in m_sw.vrf_ifaces:
             if vrf['if_name'] == "Vlan"+vlan_id:
                 vrf_name = vrf['vrf_name']
 
         masterip = None
         slaveip = None
         vip = None
-        for hsrp in sw.hsrp:
+        for hsrp in m_sw.hsrp:
             if hsrp['sh_if_index'] == "Vlan"+vlan_id:
                 masterip = hsrp['sh_active_router_addr']
                 slaveip =  hsrp['sh_standby_router_addr']
                 vip = hsrp.get('sh_vip')
 
         mask = None
-        for iface in sw.interfaces:
-            if iface["interface"] == "Vlan"+vlan_id:
+        for iface in m_sw.interfaces:
+            iface_name = "Vlan"+vlan_id
+            if iface["interface"] == iface_name:
                 mask = iface.get("svi_ip_mask")
+                if not masterip:
+                    masterip = iface.get('svi_ip_addr')
+                    s_iface = s_sw.get_interface(iface_name)
+                    if s_iface:
+                        slaveip = s_iface.get('svi_ip_addr')
+                # print(iface)
 
-        print("- { name: '%s', vlan_id: %s, vrf: '%s', "
-              "masterip: %s, slaveip: %s, vip: %s, mask: %s }" % (
-                vlan['vlanshowbr-vlanname'], vlan_id, vrf_name,
-                masterip, slaveip, vip, mask
-                ))
+        if not masterip:
+            print("- { name: '%s', vlan_id: %s }" % (
+                      vlan['vlanshowbr-vlanname'], vlan_id
+                  ))
+        elif not vip:
+            print("- { name: '%s', vlan_id: %s, vrf: '%s', "
+                  "masterip: %s, slaveip: %s, mask: %s }" % (
+                      vlan['vlanshowbr-vlanname'], vlan_id, vrf_name,
+                      masterip, slaveip, mask
+                  ))
+        else:
+            print("- { name: '%s', vlan_id: %s, vrf: '%s', "
+                  "masterip: %s, slaveip: %s, vip: %s, mask: %s }" % (
+                    vlan['vlanshowbr-vlanname'], vlan_id, vrf_name,
+                    masterip, slaveip, vip, mask
+                    ))
