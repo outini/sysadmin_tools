@@ -23,7 +23,7 @@ import json
 import netmiko
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 class Nexus(object):
@@ -121,9 +121,6 @@ if __name__ == "__main__":
     for vlan in m_sw.vlans:
         vlan_id = vlan['vlanshowbr-vlanid']
 
-        # if vlan_id != "3951" and vlan_id != "3932":
-        #     continue
-
         vrf_name = "default"
         for vrf in m_sw.vrf_ifaces:
             if vrf['if_name'] == "Vlan"+vlan_id:
@@ -148,7 +145,6 @@ if __name__ == "__main__":
                     s_iface = s_sw.get_interface(iface_name)
                     if s_iface:
                         slaveip = s_iface.get('svi_ip_addr')
-                # print(iface)
 
         if not masterip:
             print("- { name: '%s', vlan_id: %s }" % (
