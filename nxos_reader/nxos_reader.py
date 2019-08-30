@@ -23,7 +23,44 @@ import json
 import netmiko
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
+
+
+class UnsupportedFeature(RuntimeError):
+    def __init__(self, feature):
+        self.msg = "Unsupported feature: " + feature
+
+    def __repr__(self):
+        return self.msg
+
+    def __str__(self):
+        self.__repr__()
+
+
+class Entry(dict):
+    """"""
+
+    def to_json(self):
+        output = ["name: {vlan_name}", "vlan_id: {vlan_id}"]
+
+        if self['vni'] is not None:
+            output.extend([
+                "vrf: {vrf}",
+                "isL3: {isl3}",
+                "vni: {vni}"
+            ])
+            if self['isl3'] is False:
+                output.extend(["gwip: {masterip}", "mask: {mask} "])
+        elif self['masterip']:
+            output.extend([
+                "masterip: {masterip}",
+                "slaveip: {slaveip}",
+                "mask: {mask}"
+            ])
+            if self['vip']:
+                output.extend(["vip: {vip}"])
+
+        return "- {" + ", ".join(output).format(**self) + "}"
 
 
 class Nexus(object):
@@ -44,6 +81,7 @@ class Nexus(object):
         self._vrf_ifaces = None
         self._interfaces = None
         self._hsrp = None
+        self._vxlan = None
 
     @property
     def conn(self):
@@ -70,6 +108,7 @@ class Nexus(object):
         for iface in self.interfaces:
             if name == iface["interface"]:
                 return iface
+        return {}
 
     @property
     def vrfs(self):
@@ -85,12 +124,88 @@ class Nexus(object):
             self._vrf_ifaces = json.loads(out)["TABLE_if"]
         return self._vrf_ifaces["ROW_if"]
 
+    def get_vrf(self, iface_name):
+        vrf_name = "default"
+        for vrf in self.vrf_ifaces:
+            if vrf['if_name'] == iface_name:
+                vrf_name = vrf['vrf_name']
+        return vrf_name
+
     @property
     def hsrp(self):
         if not self._hsrp:
             out = self.conn.send_command("show hsrp all | json")
+            if "% Invalid command" in out:
+                raise UnsupportedFeature("hsrp")
             self._hsrp = json.loads(out)["TABLE_grp_detail"]
         return self._hsrp['ROW_grp_detail']
+
+    def get_hsrp(self, iface_name):
+        for hsrp in self.hsrp:
+            if hsrp['sh_if_index'] == iface_name:
+                return hsrp
+        return {}
+
+    @property
+    def vxlan(self):
+        if not self._vxlan:
+            self._vxlan = {}
+            out = self.conn.send_command("show vxlan")
+            for line in out.splitlines():
+                if line.startswith('Vlan') or line.startswith('===='):
+                    continue
+                vlan_id, vni = line.split(None, 1)
+                self._vxlan[vlan_id] = vni
+        return self._vxlan
+
+
+def gather_data(conn_str_a, conn_str_b, vxlan=False):
+    m_sw = Nexus(conn_str_a)
+    if conn_str_b:
+        s_sw = Nexus(conn_str_b)
+
+    entries = []
+    for vlan in m_sw.vlans:
+        vlan_id = vlan['vlanshowbr-vlanid']
+        iface_name = "Vlan" + vlan_id
+        iface = m_sw.get_interface(iface_name)
+
+        vrf_name = m_sw.get_vrf(iface_name)
+        mask = iface.get("svi_ip_mask")
+
+        slaveip = None
+        vip = None
+        isl3 = None
+        vni = None
+
+        if not vxlan:
+            hsrp = m_sw.get_hsrp(iface_name)
+            masterip = hsrp.get('sh_active_router_addr')
+            slaveip = hsrp.get('sh_standby_router_addr')
+            vip = hsrp.get('sh_vip')
+
+            if not masterip:
+                masterip = iface.get('svi_ip_addr')
+                s_iface = s_sw.get_interface(iface_name)
+                if s_iface:
+                    slaveip = s_iface.get('svi_ip_addr')
+        else:
+            vni = m_sw.vxlan.get(vlan_id)
+            masterip = iface.get('svi_ip_addr')
+            isl3 = False if masterip else True
+
+        entries.append(Entry(
+            vlan_id=vlan_id,
+            vlan_name=vlan['vlanshowbr-vlanname'],
+            vrf=vrf_name,
+            vni=vni,
+            masterip=masterip,
+            slaveip=slaveip,
+            vip=vip,
+            mask=mask,
+            isl3=isl3
+        ))
+    return entries
 
 
 if __name__ == "__main__":
@@ -104,6 +219,12 @@ if __name__ == "__main__":
                         help='specify a connection string user@device')
     parser.add_argument('-s', '--connect-slave', dest='s_conn',
                         help='specify a connection string user@device')
+    parser.add_argument('--vxlan', action="store_true", default=False,
+                        help='use vxlan mode, ignore hsrp and slave target')
+    parser.add_argument('-t', '--targets-file', dest="targets_file",
+                        help='specify a file listing connection strings,'
+                             ' one per line, master and slave being splitted'
+                             ' by "|"')
 
     args = parser.parse_args()
 
@@ -111,54 +232,37 @@ if __name__ == "__main__":
         print("Script version: %s" % VERSION)
         exit()
 
-    if not args.m_conn or not args.s_conn:
-        parser.error('connection string not provided')
+    targets = None
+    if args.targets_file:
+        targets = open(args.targets_file).readlines()
+    elif not args.m_conn:
+        parser.error('master connection string not provided')
+        exit(1)
+    elif not args.s_conn and not args.vxlan:
+        parser.error('slave connection string not provided')
         exit(1)
 
-    m_sw = Nexus(args.m_conn)
-    s_sw = Nexus(args.s_conn)
+    if targets is not None:
+        entries = {}
+        for line in targets:
+            target = line.strip().split('|', 1)
+            master = target[0]
+            slave = target[1] if len(target) == 2 else None
 
-    for vlan in m_sw.vlans:
-        vlan_id = vlan['vlanshowbr-vlanid']
+            try:
+                data = gather_data(master, slave, args.vxlan)
+            except:
+                print("# unresponsive targets: " + line.strip())
+                continue
 
-        vrf_name = "default"
-        for vrf in m_sw.vrf_ifaces:
-            if vrf['if_name'] == "Vlan"+vlan_id:
-                vrf_name = vrf['vrf_name']
+            for entry in data:
+                if entry['vlan_id'] not in entries:
+                    entries[entry['vlan_id']] = entry
 
-        masterip = None
-        slaveip = None
-        vip = None
-        for hsrp in m_sw.hsrp:
-            if hsrp['sh_if_index'] == "Vlan"+vlan_id:
-                masterip = hsrp['sh_active_router_addr']
-                slaveip =  hsrp['sh_standby_router_addr']
-                vip = hsrp.get('sh_vip')
+        for entry in entries.values():
+            print(entry.to_json())
 
-        mask = None
-        for iface in m_sw.interfaces:
-            iface_name = "Vlan"+vlan_id
-            if iface["interface"] == iface_name:
-                mask = iface.get("svi_ip_mask")
-                if not masterip:
-                    masterip = iface.get('svi_ip_addr')
-                    s_iface = s_sw.get_interface(iface_name)
-                    if s_iface:
-                        slaveip = s_iface.get('svi_ip_addr')
-
-        if not masterip:
-            print("- { name: '%s', vlan_id: %s }" % (
-                      vlan['vlanshowbr-vlanname'], vlan_id
-                  ))
-        elif not vip:
-            print("- { name: '%s', vlan_id: %s, vrf: '%s', "
-                  "masterip: %s, slaveip: %s, mask: %s }" % (
-                      vlan['vlanshowbr-vlanname'], vlan_id, vrf_name,
-                      masterip, slaveip, mask
-                  ))
-        else:
-            print("- { name: '%s', vlan_id: %s, vrf: '%s', "
-                  "masterip: %s, slaveip: %s, vip: %s, mask: %s }" % (
-                    vlan['vlanshowbr-vlanname'], vlan_id, vrf_name,
-                    masterip, slaveip, vip, mask
-                    ))
+    else:
+        data = gather_data(args.m_conn, args.s_conn, args.vxlan)
+        for entry in data:
+            print(entry.to_json())
