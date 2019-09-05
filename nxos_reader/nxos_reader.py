@@ -60,7 +60,7 @@ class Entry(dict):
             if self['vip']:
                 output.extend(["vip: {vip}"])
 
-        return "- {" + ", ".join(output).format(**self) + "}"
+        return "- { " + ", ".join(output).format(**self) + " }"
 
 
 class Nexus(object):
