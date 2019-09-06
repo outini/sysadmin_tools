@@ -53,6 +53,7 @@ class Entry(dict):
                 output.extend(["gwip: {masterip}", "mask: {mask} "])
         elif self['masterip']:
             output.extend([
+                "vrf: {vrf}",
                 "masterip: {masterip}",
                 "slaveip: {slaveip}",
                 "mask: {mask}"
