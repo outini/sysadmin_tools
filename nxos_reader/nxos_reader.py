@@ -41,11 +41,11 @@ class Entry(dict):
     """"""
 
     def to_json(self):
-        output = ["name: {vlan_name}", "vlan_id: {vlan_id}"]
+        output = ["name: '{vlan_name}'", "vlan_id: {vlan_id}"]
 
         if self['vni'] is not None:
             output.extend([
-                "vrf: {vrf}",
+                "vrf: '{vrf}'",
                 "isL3: {isl3}",
                 "vni: {vni}"
             ])
@@ -53,6 +53,7 @@ class Entry(dict):
                 output.extend(["gwip: {masterip}", "mask: {mask} "])
         elif self['masterip']:
             output.extend([
+                "vrf: '{vrf}'",
                 "masterip: {masterip}",
                 "slaveip: {slaveip}",
                 "mask: {mask}"
