@@ -20,6 +20,7 @@ interface port-channel %s
   switchport trunk native vlan %s
   switchport trunk allowed vlan %s
   no lacp suspend-individual
+  spanning-tree port type edge trunk
   vpc %s
   no shutdown
 "
