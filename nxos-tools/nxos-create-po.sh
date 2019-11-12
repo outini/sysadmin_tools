@@ -1,29 +1,7 @@
 #! /usr/bin/env bash
 
 
-
 SW_USER="$USER"
-
-ETH_INT_CFG="\
-interface %s
-  description %s
-  switchport
-  channel-group %s mode passive
-  no shutdown
-"
-
-PO_INT_CFG="\
-interface port-channel %s
-  description %s
-  switchport
-  switchport mode trunk
-  switchport trunk native vlan %s
-  switchport trunk allowed vlan %s
-  no lacp suspend-individual
-  spanning-tree port type edge trunk
-  vpc %s
-  no shutdown
-"
 
 NXOS_LIST_PO="show port-channel summary | grep '^[1-9]'"
 NXOS_SHOW_IF_CFG="show running-config interface"
@@ -153,10 +131,34 @@ create_po() {
     local po="${3}"
     local nvlan="${4}"
     local avlan="${5}"
+    local trunk="${6}"
 
     echo "conf t"
-    printf "${ETH_INT_CFG}" "${ifaces}" "${desc}" "${po}"
-    printf "${PO_INT_CFG}" "${po}" "${desc}" "${nvlan}" "${avlan}" "${po}"
+
+    echo "interface ${ifaces}"
+    echo "  description ${desc}"
+    echo "  switchport"
+    echo "  channel-group ${po} mode passive"
+    echo "  no shutdown"
+
+    echo "interface port-channel ${po}"
+    echo "  description ${desc}"
+    echo "  switchport"
+
+    if ${trunk:-true}; then
+        echo "  switchport mode trunk"
+        echo "  switchport trunk native vlan ${nvlan}"
+        [ -n "${avlan}" ] &&
+        echo "  switchport trunk allowed vlan ${nvlan},${avlan}"
+    else
+        echo "  switchport mode access"
+        echo "  switchport access vlan ${nvlan}"
+    fi
+    echo "  no lacp suspend-individual"
+    echo "  spanning-tree port type edge trunk"
+    echo "  vpc ${po}"
+    echo "  no shutdown"
+
     echo "end"
 }
 
@@ -237,12 +239,12 @@ avail_po=$(find_next_po ${switch_a} ${switch_b})
 [ -n "$avail_po" ] || exit_err "no available port-channel number"
 
 create_po "${description}" "${switch_ports_a}" "${avail_po}" \
-          "${l2_native_vlan}" "${l2_allowed_vlan}" |
+          "${l2_native_vlan}" "${l2_allowed_vlan}" ${trunk} |
 sw_run_cmds "${switch_a}"
 
 [ -n "${switch_b}" ] &&
 create_po "${description}" "${switch_ports_b}" "${avail_po}" \
-          "${l2_native_vlan}" "${l2_allowed_vlan}" |
+          "${l2_native_vlan}" "${l2_allowed_vlan}" ${trunk} |
 sw_run_cmds "${switch_b}"
 
 info "port-channel ${avail_po} created"
