@@ -69,7 +69,8 @@ sw_run_cmds() {
     local switch="${1}"; shift
     debug "${switch}: running command: ${@}"
     ssh -T -l "${SW_USER}" "${switch}" "${@}" 2> >(
-        grep -v 'User Access Verification'
+        grep -v 'User Access Verification' \
+             -v 'stty: standard input: Invalid argument'
     )
 }
 
