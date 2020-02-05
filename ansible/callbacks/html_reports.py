@@ -510,7 +510,6 @@ class CallbackModule(CallbackBase):
         report_name = "ansible-report-%s.html" % (
             self.start.strftime("%Y%m%d-%H%M%S")
         )
-        report_name = "ansible-report.html"
 
         if not os.path.exists(self.reports_path):
             os.makedirs(self.reports_path)
