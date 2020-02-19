@@ -268,8 +268,7 @@ if __name__ == "__main__":
         exit(1)
     elif not args.s_conn:
         try:
-            assert args.vxlan
-            assert args.vlans_macs
+            assert args.vxlan or args.vlans_macs
         except AssertionError:
             parser.error('slave connection string not provided')
             exit(1)
