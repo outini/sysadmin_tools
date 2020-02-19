@@ -77,6 +77,7 @@ class Nexus(object):
             "allow_agent": True
         }
         self._conn = None
+        self._mac_addrs = None
         self._vlans = None
         self._vrfs = None
         self._vrf_ifaces = None
@@ -90,6 +91,13 @@ class Nexus(object):
         if not self._conn:
             self._conn = netmiko.ConnectHandler(**self.device)
         return self._conn
+
+    @property
+    def mac_addrs(self):
+        if not self._mac_addrs:
+            out = self.conn.send_command("show mac address-table | json")
+            self._mac_addrs = json.loads(out)['TABLE_mac_address']
+        return self._mac_addrs['ROW_mac_address']
 
     @property
     def vlans(self):
@@ -131,6 +139,12 @@ class Nexus(object):
             if vrf['if_name'] == iface_name:
                 vrf_name = vrf['vrf_name']
         return vrf_name
+
+    def get_vlan_macs(self, vlan_id, skip_local=True):
+        for mac in [m for m in self.mac_addrs if m['disp_vlan'] == vlan_id]:
+            if skip_local and mac['disp_type'] in ['G']:
+                continue
+            yield mac
 
     @property
     def hsrp(self):
@@ -209,6 +223,16 @@ def gather_data(conn_str_a, conn_str_b, vxlan=False):
     return entries
 
 
+def show_vlans_macs(conn_str):
+    m_sw = Nexus(conn_str)
+    for vlan in m_sw.vlans:
+        vlan_id = vlan['vlanshowbr-vlanid']
+        print("vlan %s mac addresses count: %d" % (
+            vlan_id,
+            len(list(m_sw.get_vlan_macs(vlan_id)))
+        ))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Cisco NXOS configuration reader')
@@ -226,6 +250,9 @@ if __name__ == "__main__":
                         help='specify a file listing connection strings,'
                              ' one per line, master and slave being splitted'
                              ' by "|"')
+    parser.add_argument('-e', '--vlans-macs', dest="vlans_macs",
+                        action="store_true",
+                        help='show discovered macs per vlan')
 
     args = parser.parse_args()
 
@@ -240,8 +267,12 @@ if __name__ == "__main__":
         parser.error('master connection string not provided')
         exit(1)
     elif not args.s_conn and not args.vxlan:
-        parser.error('slave connection string not provided')
-        exit(1)
+        try:
+            assert args.vxlan
+            assert args.vlans_macs
+        except AssertionError:
+            parser.error('slave connection string not provided')
+            exit(1)
 
     if targets is not None:
         entries = {}
@@ -251,6 +282,10 @@ if __name__ == "__main__":
             slave = target[1] if len(target) == 2 else None
 
             try:
+                if args.vlans_macs:
+                    show_vlans_macs(master)
+                    continue
+
                 data = gather_data(master, slave, args.vxlan)
             except:
                 print("# unresponsive targets: " + line.strip())
@@ -264,6 +299,10 @@ if __name__ == "__main__":
             print(entry.to_json())
 
     else:
+        if args.vlans_macs:
+            show_vlans_macs(args.m_conn)
+            exit(1)
+
         data = gather_data(args.m_conn, args.s_conn, args.vxlan)
         for entry in data:
             print(entry.to_json())
