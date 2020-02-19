@@ -266,7 +266,7 @@ if __name__ == "__main__":
     elif not args.m_conn:
         parser.error('master connection string not provided')
         exit(1)
-    elif not args.s_conn and not args.vxlan:
+    elif not args.s_conn:
         try:
             assert args.vxlan
             assert args.vlans_macs
